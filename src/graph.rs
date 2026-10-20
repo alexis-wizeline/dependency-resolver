@@ -1,11 +1,7 @@
-use anyhow::Result;
-use std::collections::HashMap;
+use std::{collections::HashMap, result::Result};
 use thiserror::Error;
 
-use crate::graph::GraphError::UnknowTask;
-
 pub struct Task {
-    id: String,
     dependecies: Vec<String>,
 }
 
@@ -22,11 +18,11 @@ pub enum GraphError {
     },
 }
 
-pub struct DependecyGraph {
+pub struct DependencyGraph {
     tasks: HashMap<String, Task>,
 }
 
-impl DependecyGraph {
+impl DependencyGraph {
     pub fn new() -> Self {
         return Self {
             tasks: HashMap::new(),
@@ -43,7 +39,6 @@ impl DependecyGraph {
         self.tasks.insert(
             key,
             Task {
-                id: id.to_string(),
                 dependecies: Vec::new(),
             },
         );
@@ -59,8 +54,8 @@ impl DependecyGraph {
         let task = self
             .tasks
             .get_mut(task_id)
-            .ok_or(UnknowTask(task_id.to_string()))?;
-        let already_dependecy = task.dependecies.contains(&dependency_id.to_string());
+            .ok_or(GraphError::UnknowTask(task_id.to_string()))?;
+        let already_dependecy = task.dependecies.iter().any(|id| id == dependency_id);
         if already_dependecy {
             return Err(GraphError::DuplicatedDependency {
                 dependency_id: dependency_id.to_string(),
@@ -79,7 +74,7 @@ mod grap_test {
 
     #[test]
     fn test_dependecy_graph() {
-        let mut graph = DependecyGraph::new();
+        let mut graph = DependencyGraph::new();
         let res = graph.add_dependency("A", "B");
         assert!(res.is_err(), "expect error for unkown dependency_id");
         assert_eq!(res.err(), Some(GraphError::UnknowTask(String::from("B"))));
