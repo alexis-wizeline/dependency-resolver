@@ -10,7 +10,7 @@ pub enum GraphError {
     #[error("Task {0} already exist")]
     DuplicatedTask(String),
     #[error("Task {0} does not exist")]
-    UnknowTask(String),
+    UnknownTask(String),
     #[error("Task {dependency_id} is already a depdency of {task_id}")]
     DuplicatedDependency {
         dependency_id: String,
@@ -30,8 +30,7 @@ impl DependencyGraph {
     }
 
     pub fn add_task(&mut self, id: &str) -> Result<(), GraphError> {
-        let exist: bool = self.tasks.contains_key(id);
-        if exist {
+        if self.tasks.contains_key(id) {
             return Err(GraphError::DuplicatedTask(id.to_string()));
         }
 
@@ -47,14 +46,13 @@ impl DependencyGraph {
     }
 
     pub fn add_dependency(&mut self, task_id: &str, dependency_id: &str) -> Result<(), GraphError> {
-        let dependecy_exist = self.tasks.contains_key(dependency_id);
-        if !dependecy_exist {
-            return Err(GraphError::UnknowTask(dependency_id.to_string()));
+        if !self.tasks.contains_key(dependency_id) {
+            return Err(GraphError::UnknownTask(dependency_id.to_string()));
         }
         let task = self
             .tasks
             .get_mut(task_id)
-            .ok_or(GraphError::UnknowTask(task_id.to_string()))?;
+            .ok_or(GraphError::UnknownTask(task_id.to_string()))?;
         let already_dependecy = task.dependecies.iter().any(|id| id == dependency_id);
         if already_dependecy {
             return Err(GraphError::DuplicatedDependency {
@@ -144,7 +142,7 @@ mod grap_test {
         );
         assert_eq!(
             missing_depency_err.err(),
-            Some(GraphError::UnknowTask(String::from("B")))
+            Some(GraphError::UnknownTask(String::from("B")))
         );
     }
 
@@ -155,7 +153,7 @@ mod grap_test {
         let missing_task_err = graph.add_dependency("A", "B");
         assert_eq!(
             missing_task_err.err(),
-            Some(GraphError::UnknowTask(String::from("A")))
+            Some(GraphError::UnknownTask(String::from("A")))
         );
     }
 
@@ -167,6 +165,10 @@ mod grap_test {
         graph
             .add_dependency("A", "B")
             .expect("for 'B' to be added as dependecy on 'A'");
+        assert_eq!(
+            graph.tasks.get("A").expect("'A' to exist").dependecies,
+            vec!["B"]
+        );
         let duplicated_err = graph.add_dependency("A", "B");
         assert_eq!(
             duplicated_err.err(),
@@ -174,6 +176,10 @@ mod grap_test {
                 dependency_id: String::from("B"),
                 task_id: String::from("A")
             })
+        );
+        assert_eq!(
+            graph.tasks.get("A").expect("'A' to exist").dependecies,
+            vec!["B"]
         );
     }
 }
