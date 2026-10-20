@@ -73,46 +73,107 @@ mod grap_test {
     use super::*;
 
     #[test]
-    fn test_dependecy_graph() {
+    fn test_dependency_grap_add_task() {
         let mut graph = DependencyGraph::new();
-        let res = graph.add_dependency("A", "B");
-        assert!(res.is_err(), "expect error for unkown dependency_id");
-        assert_eq!(res.err(), Some(GraphError::UnknowTask(String::from("B"))));
-        let res = graph.add_task("B");
-        res.expect("to task 'B' to be added");
-        let duplicated_task_res = graph.add_task("B");
-        assert!(
-            duplicated_task_res.is_err(),
-            "expect to error out by inserting a duplicated task"
-        );
         assert_eq!(
-            duplicated_task_res.err(),
-            Some(GraphError::DuplicatedTask(String::from("B")))
-        );
-        let unknow_task_res = graph.add_dependency("A", "B");
-        assert!(
-            unknow_task_res.is_err(),
-            "excpect to fail because unknown task_id A"
-        );
-        assert_eq!(
-            unknow_task_res.err(),
-            Some(GraphError::UnknowTask(String::from("A")))
+            graph.tasks.len(),
+            0,
+            "expect the graph to be initialized with 0 tasks"
         );
         graph.add_task("A").expect("to Task 'A' to be added");
-        graph
-            .add_dependency("A", "B")
-            .expect("to Task 'B' to be added as depedency to Task 'A'");
-        let duplicated_dependency_err = graph.add_dependency("A", "B");
+        assert_eq!(graph.tasks.len(), 1, "expect the graph to contain one task");
+        let keys: Vec<String> = graph.tasks.into_keys().collect();
+        assert_eq!(keys, vec!["A"], "expect key 'A' to be present");
+    }
+
+    #[test]
+    fn test_dependency_grap_add_task_duplicated_task() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' a to be added");
+        let duplicate_err = graph.add_task("A");
         assert!(
-            duplicated_dependency_err.is_err(),
-            "expect to erro out for adding an existing dependecy"
+            duplicate_err.is_err(),
+            "expect an error to be returned when trying to add same task"
         );
         assert_eq!(
-            duplicated_dependency_err.err(),
+            duplicate_err.err(),
+            Some(GraphError::DuplicatedTask(String::from("A")))
+        );
+        let keys: Vec<String> = graph.tasks.into_keys().collect();
+        assert_eq!(
+            keys,
+            vec!["A"],
+            "excpect only a single element in the tasks for the graph"
+        );
+    }
+
+    #[test]
+    fn test_dependency_task_add_dependency() {
+        let mut graph = DependencyGraph::new();
+        graph
+            .add_task("A")
+            .expect("Expect for Task 'A' to be added");
+        graph
+            .add_task("B")
+            .expect("Expect for Task 'B' to be added");
+        graph
+            .add_dependency("A", "B")
+            .expect("for 'B' to be as dependency for 'A'");
+        match graph.tasks.get("A") {
+            Some(task) => {
+                assert_eq!(
+                    task.dependecies,
+                    vec!["B"],
+                    "to 'B' to be present in teh depencies array"
+                );
+            }
+            None => {
+                panic!("expect for Task 'A' to exists");
+            }
+        }
+    }
+
+    #[test]
+    fn test_dependency_task_add_dependency_missing_dependency_task() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to Task 'A' to be added");
+        let missing_depency_err = graph.add_dependency("A", "B");
+        assert!(
+            missing_depency_err.is_err(),
+            "expect to faile because missing dependecy task"
+        );
+        assert_eq!(
+            missing_depency_err.err(),
+            Some(GraphError::UnknowTask(String::from("B")))
+        );
+    }
+
+    #[test]
+    fn test_dependency_task_add_dependency_missing_task() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("B").expect("to task 'B' to be Added");
+        let missing_task_err = graph.add_dependency("A", "B");
+        assert_eq!(
+            missing_task_err.err(),
+            Some(GraphError::UnknowTask(String::from("A")))
+        );
+    }
+
+    #[test]
+    fn test_dependency_task_add_dependency_duplicated_dependency() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to Task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be Added");
+        graph
+            .add_dependency("A", "B")
+            .expect("for 'B' to be added as dependecy on 'A'");
+        let duplicated_err = graph.add_dependency("A", "B");
+        assert_eq!(
+            duplicated_err.err(),
             Some(GraphError::DuplicatedDependency {
                 dependency_id: String::from("B"),
                 task_id: String::from("A")
             })
-        )
+        );
     }
 }
