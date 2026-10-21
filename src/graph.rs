@@ -16,6 +16,8 @@ pub enum GraphError {
         dependency_id: String,
         task_id: String,
     },
+    #[error("A cycle dependecy found with {0}")]
+    DependencyCylce(String),
 }
 
 pub struct DependencyGraph {
@@ -63,6 +65,92 @@ impl DependencyGraph {
 
         task.dependecies.push(dependency_id.to_owned());
         Ok(())
+    }
+
+    pub fn resolve(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
+        let mut result: Vec<String> = Vec::new();
+        let mut pipeline: HashMap<String, StatedTask> = HashMap::new();
+
+        self.visit_task(task_id, &mut result, &mut pipeline)?;
+
+        Ok(result)
+    }
+
+    fn visit_task(
+        &self,
+        task_id: &str,
+        result: &mut Vec<String>,
+        pipeline: &mut HashMap<String, StatedTask>,
+    ) -> Result<(), GraphError> {
+        // 1.- task exist
+        let task = self
+            .tasks
+            .get(task_id)
+            .ok_or(GraphError::UnknownTask(task_id.to_string()))?;
+
+        // 2.- is visiting?
+        if pipeline
+            .iter()
+            .any(|(id, stated)| id == task_id && stated.is_visiting())
+        {
+            return Err(GraphError::DependencyCylce(task_id.to_string()));
+        }
+
+        // 3.- is visited?
+        if pipeline
+            .iter()
+            .any(|(id, state)| id == task_id && state.is_visited())
+        {
+            return Ok(());
+        }
+
+        // 4.- add into the pipeline
+        pipeline.insert(task_id.to_string(), StatedTask::new());
+
+        // 5.- traverse dependencies.
+        let dependencies = &task.dependecies;
+        for dependency in dependencies {
+            self.visit_task(dependency, result, pipeline)?;
+        }
+
+        // 6.- visited
+        pipeline
+            .entry(task_id.to_string())
+            .and_modify(|stated| stated.visited());
+        result.push(task_id.to_string());
+
+        Ok(())
+    }
+}
+
+#[derive(PartialEq, Debug)]
+enum TraverseState {
+    Visiting,
+    Visited,
+}
+
+#[derive(Debug)]
+struct StatedTask {
+    state: TraverseState,
+}
+
+impl StatedTask {
+    fn new() -> Self {
+        Self {
+            state: TraverseState::Visiting,
+        }
+    }
+
+    fn is_visiting(&self) -> bool {
+        self.state == TraverseState::Visiting
+    }
+
+    fn is_visited(&self) -> bool {
+        self.state == TraverseState::Visited
+    }
+
+    fn visited(&mut self) {
+        self.state = TraverseState::Visited
     }
 }
 
@@ -180,6 +268,148 @@ mod grap_test {
         assert_eq!(
             graph.tasks.get("A").expect("'A' to exist").dependecies,
             vec!["B"]
+        );
+    }
+
+    #[test]
+    fn test_stated_task_visiting_when_created() {
+        assert!(
+            StatedTask::new().is_visiting(),
+            "expect the task to be visiting when created"
+        )
+    }
+
+    #[test]
+    fn test_stated_task_visited_when_transition_happens() {
+        let mut task = StatedTask::new();
+        task.visited();
+        assert!(
+            task.is_visited(),
+            "expect the visit to be transitioned to visited once visited is called"
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_simple_traverse() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependecy for 'A'");
+        graph
+            .add_dependency("B", "C")
+            .expect("for task 'C' to be added as dependecy for 'B'");
+
+        assert_eq!(
+            graph
+                .resolve("A")
+                .expect("for the graph to be traverse without errors"),
+            vec!["C", "B", "A"]
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_cylcle_dependecy() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependecy for 'A'");
+        graph
+            .add_dependency("B", "C")
+            .expect("for task 'C' to be added as dependecy for 'B'");
+        graph
+            .add_dependency("C", "A")
+            .expect("for task 'A' to be added as dependecy for 'C'");
+
+        assert_eq!(
+            graph.resolve("A").expect_err("to return a cycle dependecy"),
+            GraphError::DependencyCylce(String::from("A"))
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_error_when_task_does_not_exist() {
+        let graph = DependencyGraph::new();
+        assert_eq!(
+            graph
+                .resolve("A")
+                .expect_err("expect to error out when task does nto exist"),
+            GraphError::UnknownTask(String::from("A"))
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_it_return_same_when_called_multiple_times() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependecy for 'A'");
+        let first = graph
+            .resolve("A")
+            .expect("for resolve task not return any error");
+        let second = graph
+            .resolve("A")
+            .expect("for resolve task not return any error");
+        assert_eq!(first, vec!["B", "A"]);
+        assert_eq!(second, vec!["B", "A"]);
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_it_returns_only_the_realted_tasks() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+        graph.add_task("D").expect("to task 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependecy for 'A'");
+        graph
+            .add_dependency("B", "C")
+            .expect("for task 'C' to be added as dependecy for 'B'");
+
+        let result = graph.resolve("A").expect("for resolve A not to error out");
+        assert_eq!(result, vec!["C", "B", "A"]);
+        assert!(!result.iter().any(|id| id == "D"));
+        assert_eq!(
+            graph.resolve("D").expect("for resolve D not to error out"),
+            vec!["D"]
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_it_returns_exactly_once_all_related_tasks() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+        graph.add_task("D").expect("to task 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependecy for 'A'");
+        graph
+            .add_dependency("A", "C")
+            .expect("for task 'C' to be added as dependecy for 'A'");
+        graph
+            .add_dependency("B", "D")
+            .expect("for task 'D' to be added as dependecy for 'B'");
+        graph
+            .add_dependency("C", "D")
+            .expect("for task 'D' to be added as dependecy for 'C'");
+        assert_eq!(
+            graph.resolve("A").expect("for resolve A not to error out"),
+            vec!["D", "B", "C", "A"]
         );
     }
 }
