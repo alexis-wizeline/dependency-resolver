@@ -24,11 +24,17 @@ pub struct DependencyGraph {
     tasks: HashMap<String, Task>,
 }
 
+impl Default for DependencyGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DependencyGraph {
     pub fn new() -> Self {
-        return Self {
+        Self {
             tasks: HashMap::new(),
-        };
+        }
     }
 
     pub fn add_task(&mut self, id: &str) -> Result<(), GraphError> {
