@@ -447,7 +447,7 @@ mod graph_test {
     }
 
     #[test]
-    fn tes_dependecy_graph_resolve_iterative_same_as_resolve() {
+    fn test_dependecy_graph_resolve_iterative_same_as_resolve() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -480,7 +480,7 @@ mod graph_test {
     }
 
     #[test]
-    fn tes_dependecy_graph_resolve_iterative_handles_cycle_detections() {
+    fn test_dependecy_graph_resolve_iterative_handles_cycle_detections() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -513,7 +513,7 @@ mod graph_test {
     }
 
     #[test]
-    fn tes_dependecy_graph_resolve_iterative_only_returns_related_tasks() {
+    fn test_dependecy_graph_resolve_iterative_only_returns_related_tasks() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
