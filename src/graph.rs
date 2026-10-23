@@ -91,8 +91,8 @@ impl DependencyGraph {
         while let Some((id, operation)) = stack.pop() {
             match operation {
                 StackOperation::Exiting => {
-                    result.push(id.to_owned());
-                    pipeline.insert(id, TraverseState::Visited);
+                    pipeline.insert(id.clone(), TraverseState::Visited);
+                    result.push(id);
                     continue;
                 }
                 StackOperation::Entering => {}
@@ -115,8 +115,8 @@ impl DependencyGraph {
             pipeline.insert(id.to_owned(), TraverseState::Visiting);
             stack.push((id, StackOperation::Exiting));
 
-            for dependecy in task.dependencies.iter().rev() {
-                stack.push((dependecy.to_owned(), StackOperation::Entering));
+            for dependency in task.dependencies.iter().rev() {
+                stack.push((dependency.to_owned(), StackOperation::Entering));
             }
         }
 
@@ -447,7 +447,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependecy_graph_resolve_iterative_same_as_resolve() {
+    fn test_dependency_graph_resolve_iterative_same_as_resolve() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -480,7 +480,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependecy_graph_resolve_iterative_handles_cycle_detections() {
+    fn test_dependency_graph_resolve_iterative_handles_cycle_detections() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -513,7 +513,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependecy_graph_resolve_iterative_only_returns_related_tasks() {
+    fn test_dependency_graph_resolve_iterative_only_returns_related_tasks() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
