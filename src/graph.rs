@@ -82,6 +82,47 @@ impl DependencyGraph {
         Ok(result)
     }
 
+    pub fn resolve_iterative(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
+        let mut result: Vec<String> = Vec::new();
+        let mut stack: Vec<(String, StackOperation)> =
+            Vec::from([(task_id.to_string(), StackOperation::Entering)]);
+        let mut pipeline: HashMap<String, TraverseState> = HashMap::new();
+
+        while let Some((id, operation)) = stack.pop() {
+            match operation {
+                StackOperation::Exiting => {
+                    result.push(id.to_owned());
+                    pipeline.insert(id, TraverseState::Visited);
+                    continue;
+                }
+                StackOperation::Entering => {}
+            }
+
+            match pipeline.get(&id) {
+                Some(TraverseState::Visiting) => {
+                    return Err(GraphError::CycleDetected(id));
+                }
+                Some(TraverseState::Visited) => {
+                    continue;
+                }
+                None => {}
+            }
+
+            let task = self
+                .tasks
+                .get(&id)
+                .ok_or(GraphError::UnknownTask(id.to_owned()))?;
+            pipeline.insert(id.to_owned(), TraverseState::Visiting);
+            stack.push((id, StackOperation::Exiting));
+
+            for dependecy in task.dependencies.iter().rev() {
+                stack.push((dependecy.to_owned(), StackOperation::Entering));
+            }
+        }
+
+        Ok(result)
+    }
+
     fn visit_task(
         &self,
         task_id: &str,
@@ -124,6 +165,12 @@ impl DependencyGraph {
 enum TraverseState {
     Visiting,
     Visited,
+}
+
+#[derive(Debug, PartialEq)]
+enum StackOperation {
+    Entering,
+    Exiting,
 }
 
 #[cfg(test)]
@@ -396,6 +443,102 @@ mod graph_test {
                 .resolve("X")
                 .expect_err("for resolve X to fail with cycle detected"),
             GraphError::CycleDetected(String::from("X"))
+        );
+    }
+
+    #[test]
+    fn tes_dependecy_graph_resolve_iterative_same_as_resolve() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+        graph.add_task("D").expect("to task 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for task 'B' to be added as dependency for 'A'");
+        graph
+            .add_dependency("A", "C")
+            .expect("for task 'C' to be added as dependency for 'A'");
+        graph
+            .add_dependency("B", "D")
+            .expect("for task 'D' to be added as dependency for 'B'");
+        graph
+            .add_dependency("C", "D")
+            .expect("for task 'D' to be added as dependency for 'C'");
+
+        let iterative_res = graph
+            .resolve_iterative("A")
+            .expect("for iterative not to error out");
+        let recursive_res = graph
+            .resolve("A")
+            .expect("for resolve not to error error out");
+
+        assert_eq!(iterative_res, recursive_res);
+        assert_eq!(iterative_res, vec!["D", "B", "C", "A"]);
+        assert_eq!(recursive_res, vec!["D", "B", "C", "A"]);
+    }
+
+    #[test]
+    fn tes_dependecy_graph_resolve_iterative_handles_cycle_detections() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("C").expect("to task 'C' to be added");
+
+        graph
+            .add_dependency("A", "A")
+            .expect("to 'A' is dependency for 'A'");
+
+        graph
+            .add_dependency("B", "C")
+            .expect("fo a 'C' becomes a dependency for 'B'");
+        graph
+            .add_dependency("C", "B")
+            .expect("for 'B' to be a dependency of 'C'");
+
+        assert_eq!(
+            graph
+                .resolve_iterative("A")
+                .expect_err("to faile because cycle"),
+            GraphError::CycleDetected(String::from("A"))
+        );
+
+        assert_eq!(
+            graph
+                .resolve_iterative("B")
+                .expect_err("To fail for a cycle in B"),
+            GraphError::CycleDetected(String::from("B"))
+        );
+    }
+
+    #[test]
+    fn tes_dependecy_graph_resolve_iterative_only_returns_related_tasks() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("to task 'A' to be added");
+        graph.add_task("B").expect("to task 'B' to be added");
+        graph.add_task("X").expect("to task 'X' to be added");
+        graph.add_task("Y").expect("to task 'Y' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for dependency 'B' to be added to A");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for dependency 'Y' to be added to 'X'");
+
+        assert_eq!(
+            graph
+                .resolve_iterative("A")
+                .expect("for resolve_iterative(A) not to error out "),
+            vec!["B", "A"]
+        );
+
+        assert_eq!(
+            graph
+                .resolve_iterative("X")
+                .expect("for resolve_iterative(X) not to error out "),
+            vec!["Y", "X"]
         );
     }
 }
