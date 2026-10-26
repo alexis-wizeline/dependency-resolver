@@ -678,3 +678,55 @@ mod graph_test {
         );
     }
 }
+
+#[cfg(test)]
+mod scale_test {
+    use super::*;
+
+    fn linear_chain(len: usize) -> (DependencyGraph, String) {
+        let mut graph = DependencyGraph::new();
+        for i in 0..len {
+            graph
+                .add_task(&format!("n{i}"))
+                .expect("for a new  node to be added");
+        }
+        for i in 0..len.saturating_sub(1) {
+            graph
+                .add_dependency(&format!("n{i}"), &format!("n{}", i + 1))
+                .expect("for a new dependecy to be formed");
+        }
+        return (graph, "n0".to_string());
+    }
+
+    fn layered_dag(layers: usize, width: usize) -> (DependencyGraph, String) {
+        let mut graph = DependencyGraph::new();
+        graph
+            .add_task("root")
+            .expect("for the root node to be added");
+        for l in 0..layers {
+            for w in 0..width {
+                graph
+                    .add_task(&format!("l{l}_w{w}"))
+                    .expect("for a new node to be added");
+            }
+        }
+
+        for w in 0..width {
+            graph
+                .add_dependency("root", &format!("l0_w{w}"))
+                .expect("for a dependency in root to be added");
+        }
+
+        for l in 0..layers.saturating_sub(1) {
+            for w in 0..width {
+                for nw in 0..width {
+                    graph
+                        .add_dependency(&format!("l{l}_w{w}"), &format!("l{}_w{nw}", l + 1))
+                        .expect("for a new dependecy layered to be added");
+                }
+            }
+        }
+
+        (graph, "root".to_string())
+    }
+}
