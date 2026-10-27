@@ -417,7 +417,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependency_graph_resolve_self_dependecies_and_unrelated_solves() {
+    fn test_dependency_graph_resolve_self_dependencies_and_unrelated_solves() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -562,7 +562,7 @@ mod graph_test {
 
         graph
             .add_dependency("A", "A")
-            .expect("to create a self dependecy");
+            .expect("to create a self dependency");
         graph
             .add_dependency("X", "Y")
             .expect("for 'X' to be dependent of 'Y'");
@@ -583,7 +583,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependecy_graph_dependecy_order_matters() {
+    fn test_dependency_graph_dependency_order_matters() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -671,10 +671,165 @@ mod graph_test {
         assert_ne!(
             graph
                 .resolve_iterative("A")
-                .expect("graph: to be able to solve dependecy of A"),
+                .expect("graph: to be able to solve dependency of A"),
             graph2
                 .resolve_iterative("A")
-                .expect("graph2: to be able to solve dependecy of A")
+                .expect("graph2: to be able to solve dependency of A")
         );
+    }
+}
+
+#[cfg(test)]
+mod scale_test {
+    use super::*;
+
+    fn linear_chain(len: usize) -> (DependencyGraph, String) {
+        assert!(len > 0);
+        let mut graph = DependencyGraph::new();
+        for i in 0..len {
+            graph
+                .add_task(&format!("n{i}"))
+                .expect("for a new node to be added");
+        }
+        for i in 0..len.saturating_sub(1) {
+            graph
+                .add_dependency(&format!("n{i}"), &format!("n{}", i + 1))
+                .expect("for a new dependency to be formed");
+        }
+        (graph, "n0".to_string())
+    }
+
+    fn layered_dag(layers: usize, width: usize) -> (DependencyGraph, String) {
+        assert!(layers > 0);
+        assert!(width > 0);
+        let mut graph = DependencyGraph::new();
+        graph
+            .add_task("root")
+            .expect("for the root node to be added");
+        for l in 0..layers {
+            for w in 0..width {
+                graph
+                    .add_task(&format!("l{l}_w{w}"))
+                    .expect("for a new node to be added");
+            }
+        }
+
+        for w in 0..width {
+            graph
+                .add_dependency("root", &format!("l0_w{w}"))
+                .expect("for a dependency in root to be added");
+        }
+
+        for l in 0..layers.saturating_sub(1) {
+            for w in 0..width {
+                for nw in 0..width {
+                    graph
+                        .add_dependency(&format!("l{l}_w{w}"), &format!("l{}_w{nw}", l + 1))
+                        .expect("for a new dependency layered to be added");
+                }
+            }
+        }
+
+        (graph, "root".to_string())
+    }
+
+    #[test]
+    fn iterative_and_recursive_solve_linear_100() {
+        let (graph, root) = linear_chain(100);
+        let iterative = graph
+            .resolve_iterative(&root)
+            .expect("for iteative solution");
+        let recursive = graph.resolve(&root).expect("for recursive solution");
+
+        assert_eq!(
+            iterative, recursive,
+            "expect same result for iterative or recursive"
+        );
+
+        assert_valid_resolution(&graph, &iterative);
+        assert_valid_resolution(&graph, &recursive);
+    }
+
+    #[test]
+    fn iterative_and_recursive_solve_linear_1000() {
+        let (graph, root) = linear_chain(1000);
+        let iterative = graph
+            .resolve_iterative(&root)
+            .expect("for iteative solution");
+        let recursive = graph.resolve(&root).expect("for recursive solution");
+
+        assert_eq!(
+            iterative, recursive,
+            "expect same result for iterative or recursive"
+        );
+
+        assert_valid_resolution(&graph, &iterative);
+        assert_valid_resolution(&graph, &recursive);
+    }
+
+    #[test]
+    #[ignore = "Large graph stress test"]
+    fn iterative_handles_deep_chains() {
+        let (graph, root) = linear_chain(200_000);
+        let iterative = graph
+            .resolve_iterative(&root)
+            .expect("for iteative solution");
+        assert_valid_resolution(&graph, &iterative);
+    }
+
+    #[test]
+    fn iterative_and_recursive_solve_dag_5_10() {
+        let (graph, root) = layered_dag(5, 10);
+        let iterative = graph
+            .resolve_iterative(&root)
+            .expect("for a iterative solution in dag");
+        let recursive = graph.resolve(&root).expect("for recusrive solution in dag");
+
+        assert_eq!(recursive, iterative);
+        assert_valid_resolution(&graph, &iterative);
+        assert_valid_resolution(&graph, &recursive);
+    }
+
+    #[test]
+    fn iterative_recursive_solve_dag_10_50() {
+        let (graph, root) = layered_dag(10, 50);
+        let iterative = graph
+            .resolve_iterative(&root)
+            .expect("for a iterative solution in dag");
+        let recursive = graph.resolve(&root).expect("for recusrive solution in dag");
+
+        assert_eq!(recursive, iterative);
+        assert_valid_resolution(&graph, &iterative);
+        assert_valid_resolution(&graph, &recursive);
+    }
+
+    fn assert_valid_resolution(graph: &DependencyGraph, result: &[String]) {
+        assert_eq!(
+            graph.tasks.len(),
+            result.len(),
+            "expect for the result len to be equal to the len of all tasks in the graph"
+        );
+
+        let mut positions: HashMap<&String, usize> = HashMap::new();
+        for (index, key) in result.iter().enumerate() {
+            assert!(
+                positions.insert(key, index).is_none(),
+                "Task {key} appears more than once"
+            );
+        }
+
+        for (key, task) in graph.tasks.iter() {
+            let index = positions
+                .get(key)
+                .unwrap_or_else(|| panic!("for {key} to be present in the result"));
+            for dependency in task.dependencies.iter() {
+                let dependency_index = positions.get(dependency).unwrap_or_else(||panic!("for all dependencies be present before the task is reached, task:{key}, missing dependency: {dependency}"));
+
+                assert!(
+                    dependency_index < &index,
+                    "the dependency must be before the task, task: {key}, position: {index}, dependency: {dependency}, dependency_position: {dependency_index}"
+                );
+            }
+        }
     }
 }
