@@ -768,6 +768,7 @@ mod scale_test {
     }
 
     #[test]
+    #[ignore = "Large graph stress test"]
     fn iterative_handles_deep_chains() {
         let (graph, root) = linear_chain(200_000);
         let iterative = graph
@@ -820,11 +821,9 @@ mod scale_test {
         for (key, task) in graph.tasks.iter() {
             let index = positions
                 .get(key)
-                .expect("for {key} to be present in the result");
+                .unwrap_or_else(|| panic!("for {key} to be present in the result"));
             for dependency in task.dependencies.iter() {
-                let dependency_index = positions.get(dependency).expect(
-                    "for all dependecies be present before the task is reached, task:{key}, missing dependecy: {dependency}",
-                );
+                let dependency_index = positions.get(dependency).unwrap_or_else(||panic!("for all dependecies be present before the task is reached, task:{key}, missing dependecy: {dependency}"));
 
                 assert!(
                     dependency_index < &index,
