@@ -417,7 +417,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependency_graph_resolve_self_dependecies_and_unrelated_solves() {
+    fn test_dependency_graph_resolve_self_dependencies_and_unrelated_solves() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -562,7 +562,7 @@ mod graph_test {
 
         graph
             .add_dependency("A", "A")
-            .expect("to create a self dependecy");
+            .expect("to create a self dependency");
         graph
             .add_dependency("X", "Y")
             .expect("for 'X' to be dependent of 'Y'");
@@ -583,7 +583,7 @@ mod graph_test {
     }
 
     #[test]
-    fn test_dependecy_graph_dependecy_order_matters() {
+    fn test_dependency_graph_dependency_order_matters() {
         let mut graph = DependencyGraph::new();
         graph.add_task("A").expect("to task 'A' to be added");
         graph.add_task("B").expect("to task 'B' to be added");
@@ -671,10 +671,10 @@ mod graph_test {
         assert_ne!(
             graph
                 .resolve_iterative("A")
-                .expect("graph: to be able to solve dependecy of A"),
+                .expect("graph: to be able to solve dependency of A"),
             graph2
                 .resolve_iterative("A")
-                .expect("graph2: to be able to solve dependecy of A")
+                .expect("graph2: to be able to solve dependency of A")
         );
     }
 }
@@ -823,11 +823,11 @@ mod scale_test {
                 .get(key)
                 .unwrap_or_else(|| panic!("for {key} to be present in the result"));
             for dependency in task.dependencies.iter() {
-                let dependency_index = positions.get(dependency).unwrap_or_else(||panic!("for all dependecies be present before the task is reached, task:{key}, missing dependecy: {dependency}"));
+                let dependency_index = positions.get(dependency).unwrap_or_else(||panic!("for all dependencies be present before the task is reached, task:{key}, missing dependency: {dependency}"));
 
                 assert!(
                     dependency_index < &index,
-                    "the dependecy must be before the task, task: {key}, position: {index}, dependency: {dependency}, dependency_position: {dependency_index}"
+                    "the dependency must be before the task, task: {key}, position: {index}, dependency: {dependency}, dependency_position: {dependency_index}"
                 );
             }
         }
