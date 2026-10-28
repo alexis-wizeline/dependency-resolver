@@ -5,3 +5,10 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2.0.21"
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "resolution"
+harness = false
