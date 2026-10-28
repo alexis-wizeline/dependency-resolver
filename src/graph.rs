@@ -84,23 +84,23 @@ impl DependencyGraph {
 
     pub fn resolve_iterative(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
         let mut result: Vec<String> = Vec::new();
-        let mut stack: Vec<(String, StackOperation)> =
-            Vec::from([(task_id.to_string(), StackOperation::Entering)]);
-        let mut pipeline: HashMap<String, TraverseState> = HashMap::new();
+        let mut stack: Vec<(&str, StackOperation)> =
+            Vec::from([(task_id, StackOperation::Entering)]);
+        let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
 
         while let Some((id, operation)) = stack.pop() {
             match operation {
                 StackOperation::Exiting => {
-                    pipeline.insert(id.clone(), TraverseState::Visited);
-                    result.push(id);
+                    pipeline.insert(id, TraverseState::Visited);
+                    result.push(id.to_string());
                     continue;
                 }
                 StackOperation::Entering => {}
             }
 
-            match pipeline.get(&id) {
+            match pipeline.get(id) {
                 Some(TraverseState::Visiting) => {
-                    return Err(GraphError::CycleDetected(id));
+                    return Err(GraphError::CycleDetected(id.to_string()));
                 }
                 Some(TraverseState::Visited) => {
                     continue;
@@ -110,13 +110,13 @@ impl DependencyGraph {
 
             let task = self
                 .tasks
-                .get(&id)
-                .ok_or(GraphError::UnknownTask(id.to_owned()))?;
-            pipeline.insert(id.to_owned(), TraverseState::Visiting);
+                .get(id)
+                .ok_or(GraphError::UnknownTask(id.to_string()))?;
+            pipeline.insert(id, TraverseState::Visiting);
             stack.push((id, StackOperation::Exiting));
 
             for dependency in task.dependencies.iter().rev() {
-                stack.push((dependency.to_owned(), StackOperation::Entering));
+                stack.push((dependency, StackOperation::Entering));
             }
         }
 
