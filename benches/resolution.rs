@@ -1,5 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use dependency_resolver::DependencyGraph;
+use std::hint::black_box;
 
 fn linear_chain(len: usize) -> (DependencyGraph, String) {
     assert!(len > 0);
@@ -56,10 +57,10 @@ fn bench_resolve_linear(c: &mut Criterion) {
     for depth in [1_000usize, 10_000] {
         let (graph, root) = linear_chain(depth);
         group.bench_with_input(BenchmarkId::new("recursive", depth), &depth, |b, _| {
-            b.iter(|| graph.resolve(&root).unwrap());
+            b.iter(|| black_box(graph.resolve(&root).unwrap()));
         });
         group.bench_with_input(BenchmarkId::new("iterative", depth), &depth, |b, _| {
-            b.iter(|| graph.resolve_iterative(&root).unwrap());
+            b.iter(|| black_box(graph.resolve_iterative(&root).unwrap()));
         });
     }
 }
@@ -72,14 +73,14 @@ fn bench_resolve_dag(c: &mut Criterion) {
             BenchmarkId::new("recursive", format!("l: {}, w: {}", input.0, input.1)),
             &input,
             |b, _| {
-                b.iter(|| graph.resolve(&root).unwrap());
+                b.iter(|| black_box(graph.resolve(&root).unwrap()));
             },
         );
         group.bench_with_input(
             BenchmarkId::new("iterative", format!("l: {}, w: {}", input.0, input.1)),
             &input,
             |b, _| {
-                b.iter(|| graph.resolve_iterative(&root).unwrap());
+                b.iter(|| black_box(graph.resolve_iterative(&root).unwrap()));
             },
         );
     }

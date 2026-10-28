@@ -84,6 +84,8 @@ impl DependencyGraph {
 
     pub fn resolve_iterative(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
         let mut result: Vec<String> = Vec::new();
+        // this 2 are deliverated using &str instead of String, this is to avoid
+        // unecessary allocations to imporve performance while travesig the graph.
         let mut stack: Vec<(&str, StackOperation)> =
             Vec::from([(task_id, StackOperation::Entering)]);
         let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
