@@ -896,7 +896,7 @@ mod graph_test {
         }
     }
 
-    fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &Vec<String>) {
+    fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &[String]) {
         let mut positions: HashMap<&str, usize> = HashMap::new();
         for (index, key) in result.iter().enumerate() {
             assert!(
@@ -906,12 +906,12 @@ mod graph_test {
         }
 
         let mut expected_reachable: HashSet<&str> = HashSet::new();
-        let mut queue: Vec<&str> = Vec::new();
+        let mut stack: Vec<&str> = Vec::new();
         for root in roots {
-            queue.push(*root);
+            stack.push(*root);
         }
 
-        while let Some(key) = queue.pop() {
+        while let Some(key) = stack.pop() {
             if !expected_reachable.insert(key) {
                 continue;
             }
@@ -924,12 +924,12 @@ mod graph_test {
                     .get(dependecy.as_str())
                     .unwrap_or_else(|| panic!("{dependecy} should be present in the many result"));
                 assert!(dependecy_index < index);
-                queue.push(dependecy);
+                stack.push(dependecy);
             }
         }
 
         assert_eq!(expected_reachable.len(), positions.len());
-        for (key, _) in positions {
+        for key in positions.keys() {
             assert!(expected_reachable.contains(key));
         }
     }
