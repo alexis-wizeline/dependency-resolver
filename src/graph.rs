@@ -75,12 +75,15 @@ impl DependencyGraph {
 
     pub fn resolve_many(&self, roots: &[&str]) -> Result<Vec<String>, GraphError> {
         let mut result: Vec<String> = Vec::new();
+        // this 2 are deliverated using &str instead of String, this is to avoid
+        // unecessary allocations to imporve performance while travesig the graph.
         let mut stack: Vec<(&str, StackOperation)> = Vec::new();
         let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
         for root in roots {
-            self.tasks
-                .contains_key(*root)
-                .ok_or(GraphError::UnknownTask(root.to_string()))?;
+            if !self.tasks.contains_key(*root) {
+                return Err(GraphError::UnknownTask(root.to_string()));
+            }
+
             stack.push((root, StackOperation::Entering));
         }
         while let Some((key, operation)) = stack.pop() {
@@ -88,6 +91,7 @@ impl DependencyGraph {
                 StackOperation::Exiting => {
                     pipeline.insert(key, TraverseState::Visited);
                     result.push(key.to_string());
+                    continue;
                 }
                 StackOperation::Entering => {}
             }
@@ -107,7 +111,7 @@ impl DependencyGraph {
                 .ok_or(GraphError::UnknownTask(key.to_string()))?;
             pipeline.insert(key, TraverseState::Visiting);
             stack.push((key, StackOperation::Exiting));
-            for dependency in task.dependencies.iter() {
+            for dependency in task.dependencies.iter().rev() {
                 stack.push((dependency, StackOperation::Entering));
             }
         }
@@ -125,46 +129,7 @@ impl DependencyGraph {
     }
 
     pub fn resolve_iterative(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
-        let mut result: Vec<String> = Vec::new();
-        // this 2 are deliverated using &str instead of String, this is to avoid
-        // unecessary allocations to imporve performance while travesig the graph.
-        let mut stack: Vec<(&str, StackOperation)> =
-            Vec::from([(task_id, StackOperation::Entering)]);
-        let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
-
-        while let Some((id, operation)) = stack.pop() {
-            match operation {
-                StackOperation::Exiting => {
-                    pipeline.insert(id, TraverseState::Visited);
-                    result.push(id.to_string());
-                    continue;
-                }
-                StackOperation::Entering => {}
-            }
-
-            match pipeline.get(id) {
-                Some(TraverseState::Visiting) => {
-                    return Err(GraphError::CycleDetected(id.to_string()));
-                }
-                Some(TraverseState::Visited) => {
-                    continue;
-                }
-                None => {}
-            }
-
-            let task = self
-                .tasks
-                .get(id)
-                .ok_or(GraphError::UnknownTask(id.to_string()))?;
-            pipeline.insert(id, TraverseState::Visiting);
-            stack.push((id, StackOperation::Exiting));
-
-            for dependency in task.dependencies.iter().rev() {
-                stack.push((dependency, StackOperation::Entering));
-            }
-        }
-
-        Ok(result)
+        self.resolve_many(&[task_id])
     }
 
     fn visit_task(
@@ -219,9 +184,9 @@ enum StackOperation {
 
 #[cfg(test)]
 mod graph_test {
-    use std::vec;
-
     use super::*;
+
+    use std::vec;
 
     #[test]
     fn test_dependency_graph_add_task() {
@@ -737,11 +702,12 @@ mod graph_test {
             .add_dependency("B", "C")
             .expect("for a new depency to be created");
 
-        assert_eq!(
-            graph
+        assert_traversal_correctness(
+            &graph,
+            &["A", "A"],
+            &graph
                 .resolve_many(&["A", "A"])
                 .expect("for resolve many to return the result of only 'A'"),
-            vec!["C", "B", "A"]
         );
     }
 
@@ -763,18 +729,20 @@ mod graph_test {
             .add_dependency("X", "Y")
             .expect("for a new dependency to be created");
 
-        assert_eq!(
-            graph
+        assert_traversal_correctness(
+            &graph,
+            &["A", "X"],
+            &graph
                 .resolve_many(&["A", "X"])
                 .expect("for resolve_many to return the result"),
-            vec!["Y", "X", "C", "B", "A"]
         );
 
-        assert_eq!(
-            graph
+        assert_traversal_correctness(
+            &graph,
+            &["X", "A"],
+            &graph
                 .resolve_many(&["X", "A"])
                 .expect("for resolve_many to return the result"),
-            vec!["C", "B", "A", "Y", "X"]
         );
     }
 
@@ -804,17 +772,20 @@ mod graph_test {
             .add_dependency("Y", "C")
             .expect("for a new dependecy to be created");
 
-        assert_eq!(
-            graph
+        assert_traversal_correctness(
+            &graph,
+            &["A", "X"],
+            &graph
                 .resolve_many(&["A", "X"])
                 .expect("for resolve_manyb to return a result"),
-            vec!["D", "C", "Y", "X", "B", "A"]
         );
-        assert_eq!(
-            graph
+
+        assert_traversal_correctness(
+            &graph,
+            &["X", "A"],
+            &graph
                 .resolve_many(&["X", "A"])
-                .expect("for resolve_manyb to return a result"),
-            vec!["D", "C", "B", "A", "Y", "X"]
+                .expect("for resolve_many to return a result"),
         );
     }
 
@@ -922,6 +893,36 @@ mod graph_test {
                 .expect_err("to found a dependecy cycle"),
             GraphError::CycleDetected(String::from("C"))
         );
+    }
+
+    fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &Vec<String>) {
+        let mut positions: HashMap<&str, usize> = HashMap::new();
+        for (index, key) in result.iter().enumerate() {
+            assert!(
+                positions.insert(key, index).is_none(),
+                "{key} should be only one time in the result"
+            );
+        }
+
+        for root in roots {
+            let root_result = graph
+                .resolve_iterative(*root)
+                .unwrap_or_else(|_| panic!("{root} should be able to solve independetly"));
+
+            for key in root_result {
+                let index = positions
+                    .get(key.as_str())
+                    .unwrap_or_else(|| panic!("{key} must be present in the resolve many result"));
+                let task = graph.tasks.get(&key).unwrap();
+                for dependecy in task.dependencies.iter() {
+                    let dependecy_index = positions.get(dependecy.as_str()).unwrap_or_else(|| {
+                        panic!("{dependecy} should be present in the many result")
+                    });
+
+                    assert!(dependecy_index < index)
+                }
+            }
+        }
     }
 }
 
