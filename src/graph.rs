@@ -73,6 +73,52 @@ impl DependencyGraph {
         Ok(())
     }
 
+    pub fn resolve_many(&self, roots: &[&str]) -> Result<Vec<String>, GraphError> {
+        let mut result: Vec<String> = Vec::new();
+        // this 2 are deliverated using &str instead of String, this is to avoid
+        // unecessary allocations to imporve performance while travesig the graph.
+        let mut stack: Vec<(&str, StackOperation)> = Vec::new();
+        let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
+        for root in roots {
+            if !self.tasks.contains_key(*root) {
+                return Err(GraphError::UnknownTask(root.to_string()));
+            }
+
+            stack.push((root, StackOperation::Entering));
+        }
+        while let Some((key, operation)) = stack.pop() {
+            match operation {
+                StackOperation::Exiting => {
+                    pipeline.insert(key, TraverseState::Visited);
+                    result.push(key.to_string());
+                    continue;
+                }
+                StackOperation::Entering => {}
+            }
+
+            match pipeline.get(key) {
+                Some(TraverseState::Visited) => {
+                    continue;
+                }
+                Some(TraverseState::Visiting) => {
+                    return Err(GraphError::CycleDetected(key.to_string()));
+                }
+                None => {}
+            }
+            let task = self
+                .tasks
+                .get(key)
+                .ok_or(GraphError::UnknownTask(key.to_string()))?;
+            pipeline.insert(key, TraverseState::Visiting);
+            stack.push((key, StackOperation::Exiting));
+            for dependency in task.dependencies.iter().rev() {
+                stack.push((dependency, StackOperation::Entering));
+            }
+        }
+
+        Ok(result)
+    }
+
     pub fn resolve(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
         let mut result: Vec<String> = Vec::new();
         let mut pipeline: HashMap<String, TraverseState> = HashMap::new();
@@ -83,46 +129,7 @@ impl DependencyGraph {
     }
 
     pub fn resolve_iterative(&self, task_id: &str) -> Result<Vec<String>, GraphError> {
-        let mut result: Vec<String> = Vec::new();
-        // this 2 are deliverated using &str instead of String, this is to avoid
-        // unecessary allocations to imporve performance while travesig the graph.
-        let mut stack: Vec<(&str, StackOperation)> =
-            Vec::from([(task_id, StackOperation::Entering)]);
-        let mut pipeline: HashMap<&str, TraverseState> = HashMap::new();
-
-        while let Some((id, operation)) = stack.pop() {
-            match operation {
-                StackOperation::Exiting => {
-                    pipeline.insert(id, TraverseState::Visited);
-                    result.push(id.to_string());
-                    continue;
-                }
-                StackOperation::Entering => {}
-            }
-
-            match pipeline.get(id) {
-                Some(TraverseState::Visiting) => {
-                    return Err(GraphError::CycleDetected(id.to_string()));
-                }
-                Some(TraverseState::Visited) => {
-                    continue;
-                }
-                None => {}
-            }
-
-            let task = self
-                .tasks
-                .get(id)
-                .ok_or(GraphError::UnknownTask(id.to_string()))?;
-            pipeline.insert(id, TraverseState::Visiting);
-            stack.push((id, StackOperation::Exiting));
-
-            for dependency in task.dependencies.iter().rev() {
-                stack.push((dependency, StackOperation::Entering));
-            }
-        }
-
-        Ok(result)
+        self.resolve_many(&[task_id])
     }
 
     fn visit_task(
@@ -178,6 +185,8 @@ enum StackOperation {
 #[cfg(test)]
 mod graph_test {
     use super::*;
+
+    use std::{collections::HashSet, vec};
 
     #[test]
     fn test_dependency_graph_add_task() {
@@ -678,6 +687,251 @@ mod graph_test {
                 .resolve_iterative("A")
                 .expect("graph2: to be able to solve dependency of A")
         );
+    }
+
+    #[test]
+    fn test_dependency_graph_resolve_many_only_resolve_same_root_one_time() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new depency to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new depency to be created");
+
+        assert_traversal_correctness(
+            &graph,
+            &["A", "A"],
+            &graph
+                .resolve_many(&["A", "A"])
+                .expect("for resolve many to return the result of only 'A'"),
+        );
+    }
+
+    #[test]
+    fn tes_dependency_graph_resolve_many_resolve_independent_sequences() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new depency to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new depency to be created");
+        graph.add_task("X").expect("for 'X' to be added");
+        graph.add_task("Y").expect("for 'Y' to be added");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for a new dependency to be created");
+
+        assert_traversal_correctness(
+            &graph,
+            &["A", "X"],
+            &graph
+                .resolve_many(&["A", "X"])
+                .expect("for resolve_many to return the result"),
+        );
+
+        assert_traversal_correctness(
+            &graph,
+            &["X", "A"],
+            &graph
+                .resolve_many(&["X", "A"])
+                .expect("for resolve_many to return the result"),
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_many_resole_related_sequences() {
+        let mut graph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("X").expect("for 'X' to be added");
+        graph.add_task("Y").expect("for 'Y' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph.add_task("D").expect("for 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("C", "D")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("Y", "C")
+            .expect("for a new dependecy to be created");
+
+        assert_traversal_correctness(
+            &graph,
+            &["A", "X"],
+            &graph
+                .resolve_many(&["A", "X"])
+                .expect("for resolve_manyb to return a result"),
+        );
+
+        assert_traversal_correctness(
+            &graph,
+            &["X", "A"],
+            &graph
+                .resolve_many(&["X", "A"])
+                .expect("for resolve_many to return a result"),
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_many_return_empty_when_nothing_requested() {
+        let mut graph: DependencyGraph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("X").expect("for 'X' to be added");
+        graph.add_task("Y").expect("for 'Y' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph.add_task("D").expect("for 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("C", "D")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("Y", "C")
+            .expect("for a new dependecy to be created");
+
+        let expected: Vec<String> = Vec::new();
+        assert_eq!(
+            graph
+                .resolve_many(&[])
+                .expect("for empty slice to be valid"),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_can_detect_unknow_tasks() {
+        let mut graph: DependencyGraph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("X").expect("for 'X' to be added");
+        graph.add_task("Y").expect("for 'Y' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph.add_task("D").expect("for 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("C", "D")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("Y", "C")
+            .expect("for a new dependecy to be created");
+
+        assert_eq!(
+            graph
+                .resolve_many(&["A", "Z"])
+                .expect_err("to error out when unknow task is requested"),
+            GraphError::UnknownTask(String::from("Z"))
+        );
+    }
+
+    #[test]
+    fn test_dependecy_graph_resolve_many_can_detect_cycles() {
+        let mut graph: DependencyGraph = DependencyGraph::new();
+        graph.add_task("A").expect("for 'A' to be added");
+        graph.add_task("B").expect("for 'B' to be added");
+        graph.add_task("X").expect("for 'X' to be added");
+        graph.add_task("Y").expect("for 'Y' to be added");
+        graph.add_task("C").expect("for 'C' to be added");
+        graph.add_task("D").expect("for 'D' to be added");
+
+        graph
+            .add_dependency("A", "B")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("B", "C")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("C", "D")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("X", "Y")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("Y", "C")
+            .expect("for a new dependecy to be created");
+        graph
+            .add_dependency("D", "A")
+            .expect("for a new dependecy to be created");
+
+        match graph
+            .resolve_many(&["A", "X"])
+            .expect_err("to found a dependecy cycle")
+        {
+            GraphError::CycleDetected(_) => {}
+            _ => panic!("expect to find a cycle error "),
+        }
+    }
+
+    fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &[String]) {
+        let mut positions: HashMap<&str, usize> = HashMap::new();
+        for (index, key) in result.iter().enumerate() {
+            assert!(
+                positions.insert(key, index).is_none(),
+                "{key} should be only one time in the result"
+            );
+        }
+
+        let mut expected_reachable: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = Vec::new();
+        for root in roots {
+            stack.push(*root);
+        }
+
+        while let Some(key) = stack.pop() {
+            if !expected_reachable.insert(key) {
+                continue;
+            }
+            let index = positions
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} must be present in the resolve many result"));
+            let task = graph.tasks.get(key).unwrap();
+            for dependecy in task.dependencies.iter() {
+                let dependecy_index = positions
+                    .get(dependecy.as_str())
+                    .unwrap_or_else(|| panic!("{dependecy} should be present in the many result"));
+                assert!(dependecy_index < index);
+                stack.push(dependecy);
+            }
+        }
+
+        assert_eq!(expected_reachable.len(), positions.len());
+        for key in positions.keys() {
+            assert!(expected_reachable.contains(key));
+        }
     }
 }
 
