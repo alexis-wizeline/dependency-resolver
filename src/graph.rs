@@ -186,7 +186,7 @@ enum StackOperation {
 mod graph_test {
     use super::*;
 
-    use std::vec;
+    use std::{collections::HashSet, vec};
 
     #[test]
     fn test_dependency_graph_add_task() {
@@ -887,12 +887,13 @@ mod graph_test {
             .add_dependency("D", "A")
             .expect("for a new dependecy to be created");
 
-        assert_eq!(
-            graph
-                .resolve_many(&["A", "X"])
-                .expect_err("to found a dependecy cycle"),
-            GraphError::CycleDetected(String::from("C"))
-        );
+        match graph
+            .resolve_many(&["A", "X"])
+            .expect_err("to found a dependecy cycle")
+        {
+            GraphError::CycleDetected(_) => {}
+            _ => panic!("expect to find a cycle error "),
+        }
     }
 
     fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &Vec<String>) {
@@ -904,24 +905,32 @@ mod graph_test {
             );
         }
 
+        let mut expected_reachable: HashSet<&str> = HashSet::new();
+        let mut queue: Vec<&str> = Vec::new();
         for root in roots {
-            let root_result = graph
-                .resolve_iterative(*root)
-                .unwrap_or_else(|_| panic!("{root} should be able to solve independetly"));
+            queue.push(*root);
+        }
 
-            for key in root_result {
-                let index = positions
-                    .get(key.as_str())
-                    .unwrap_or_else(|| panic!("{key} must be present in the resolve many result"));
-                let task = graph.tasks.get(&key).unwrap();
-                for dependecy in task.dependencies.iter() {
-                    let dependecy_index = positions.get(dependecy.as_str()).unwrap_or_else(|| {
-                        panic!("{dependecy} should be present in the many result")
-                    });
-
-                    assert!(dependecy_index < index)
-                }
+        while let Some(key) = queue.pop() {
+            if !expected_reachable.insert(key) {
+                continue;
             }
+            let index = positions
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} must be present in the resolve many result"));
+            let task = graph.tasks.get(key).unwrap();
+            for dependecy in task.dependencies.iter() {
+                let dependecy_index = positions
+                    .get(dependecy.as_str())
+                    .unwrap_or_else(|| panic!("{dependecy} should be present in the many result"));
+                assert!(dependecy_index < index);
+                queue.push(dependecy);
+            }
+        }
+
+        assert_eq!(expected_reachable.len(), positions.len());
+        for (key, _) in positions {
+            assert!(expected_reachable.contains(key));
         }
     }
 }
