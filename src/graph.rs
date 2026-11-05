@@ -113,7 +113,7 @@ impl DependencyGraph {
                     }
                 }
 
-                stack.push(&dependecy);
+                stack.push(dependecy);
             }
         }
 
