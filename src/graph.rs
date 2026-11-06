@@ -122,7 +122,7 @@ impl DependencyGraph {
             for task in current_layer.iter() {
                 if let Some(dependents) = dependents.get(task.as_str()) {
                     for dependent in dependents {
-                        let current: usize = remaining_dependencies[dependent].sub(1);
+                        let current: usize = remaining_dependencies[dependent] - 1;
                         remaining_dependencies.insert(*dependent, current);
                         if current == 0 {
                             next_layer.push(dependent.to_string());
@@ -1312,16 +1312,14 @@ mod graph_test {
     ) {
         let mut planned_tasks: HashSet<&str> = HashSet::new();
         let mut positions: HashMap<&str, usize> = HashMap::new();
-        let mut layer_index: usize = 0;
-        for layer in result {
+        for (index, layer) in result.iter().enumerate() {
             for key in layer.iter() {
                 assert!(
                     planned_tasks.insert(key),
                     "{key} must appear only one time in the result"
                 );
-                positions.insert(key, layer_index);
+                positions.insert(key, index);
             }
-            layer_index = layer_index.add(1)
         }
 
         let mut stack: Vec<&str> = Vec::new();
@@ -1346,7 +1344,7 @@ mod graph_test {
                 stack.push(dependecy);
             }
             if task.dependencies.len() > 0 {
-                assert_eq!(task_layer, &(expected_layer.add(1 as usize)));
+                assert_eq!(task_layer, &(expected_layer + 1));
             } else {
                 assert_eq!(task_layer, &expected_layer);
             }
