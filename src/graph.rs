@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Sub, result::Result};
+use std::{collections::HashMap, result::Result};
 use thiserror::Error;
 
 pub struct Task {
@@ -257,7 +257,7 @@ enum StackOperation {
 mod graph_test {
     use super::*;
 
-    use std::{cmp::max, collections::HashSet, ops::Add, vec};
+    use std::{cmp::max, collections::HashSet, vec};
 
     #[test]
     fn test_dependency_graph_add_task() {
