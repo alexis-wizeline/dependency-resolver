@@ -1,4 +1,4 @@
-use std::{collections::HashMap, result::Result};
+use std::{collections::HashMap, ops::Sub, result::Result};
 use thiserror::Error;
 
 pub struct Task {
@@ -77,8 +77,8 @@ impl DependencyGraph {
         let mut result: Vec<Vec<String>> = Vec::new();
         let mut stack: Vec<&str> = Vec::new();
 
-        let mut depency_count: HashMap<&str, usize> = HashMap::new();
-        let mut dependecy_map: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut remaining_dependencies: HashMap<&str, usize> = HashMap::new();
+        let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
 
         let mut current_layer: Vec<String> = Vec::new();
 
@@ -90,7 +90,7 @@ impl DependencyGraph {
         }
 
         while let Some(key) = stack.pop() {
-            if depency_count.contains_key(key) {
+            if remaining_dependencies.contains_key(key) {
                 continue;
             }
 
@@ -99,17 +99,17 @@ impl DependencyGraph {
                 .get(key)
                 .ok_or(GraphError::UnknownTask(key.to_string()))?;
             let count = task.dependencies.len();
-            depency_count.insert(key, count);
+            remaining_dependencies.insert(key, count);
             if count == 0 {
                 current_layer.push(key.to_string());
             }
             for dependecy in task.dependencies.iter().rev() {
-                match dependecy_map.get_mut(dependecy.as_str()) {
+                match dependents.get_mut(dependecy.as_str()) {
                     Some(dependecies) => {
                         dependecies.push(key);
                     }
                     None => {
-                        dependecy_map.insert(dependecy, vec![key]);
+                        dependents.insert(dependecy, vec![key]);
                     }
                 }
 
@@ -120,10 +120,10 @@ impl DependencyGraph {
         while !current_layer.is_empty() {
             let mut next_layer: Vec<String> = Vec::new();
             for task in current_layer.iter() {
-                if let Some(dependents) = dependecy_map.get(task.as_str()) {
+                if let Some(dependents) = dependents.get(task.as_str()) {
                     for dependent in dependents {
-                        let current: usize = depency_count[dependent].saturating_sub(1);
-                        depency_count.insert(*dependent, current);
+                        let current: usize = remaining_dependencies[dependent].sub(1);
+                        remaining_dependencies.insert(*dependent, current);
                         if current == 0 {
                             next_layer.push(dependent.to_string());
                         }
@@ -134,7 +134,10 @@ impl DependencyGraph {
             current_layer = next_layer;
         }
 
-        if let Some((k, _)) = depency_count.iter().find(|(_, value)| value > &&0) {
+        if let Some((k, _)) = remaining_dependencies
+            .iter()
+            .find(|(_, value)| value != &&0)
+        {
             return Err(GraphError::CycleDetected(k.to_string()));
         }
 
@@ -254,7 +257,7 @@ enum StackOperation {
 mod graph_test {
     use super::*;
 
-    use std::{collections::HashSet, ops::Add, vec};
+    use std::{cmp::max, collections::HashSet, ops::Add, vec};
 
     #[test]
     fn test_dependency_graph_add_task() {
@@ -1307,15 +1310,18 @@ mod graph_test {
         roots: &[&str],
         result: &[Vec<String>],
     ) {
-        let mut planed_layers: Vec<&str> = Vec::new();
+        let mut planned_tasks: HashSet<&str> = HashSet::new();
         let mut positions: HashMap<&str, usize> = HashMap::new();
-        let mut position: usize = 0;
+        let mut layer_index: usize = 0;
         for layer in result {
             for key in layer.iter() {
-                planed_layers.push(key);
-                positions.insert(key, position);
-                position = position.add(1);
+                assert!(
+                    planned_tasks.insert(key),
+                    "{key} must appear only one time in the result"
+                );
+                positions.insert(key, layer_index);
             }
+            layer_index = layer_index.add(1)
         }
 
         let mut stack: Vec<&str> = Vec::new();
@@ -1327,30 +1333,26 @@ mod graph_test {
             if !expected_reachable.insert(key) {
                 continue;
             }
-            let task_index = positions
+            let task_layer = positions
                 .get(key)
-                .unwrap_or_else(|| panic!("{key} muts exist in the result"));
+                .unwrap_or_else(|| panic!("{key} must exist in the result"));
             let task = graph.tasks.get(key).unwrap();
+            let mut expected_layer = 0;
             for dependecy in task.dependencies.iter() {
-                let dependecy_index = positions
+                let dependecy_layer = positions
                     .get(dependecy.as_str())
                     .unwrap_or_else(|| panic!("{dependecy} must exist in the result"));
-                assert!(
-                    dependecy_index < task_index,
-                    "{key}:{task_index} - {dependecy}:{dependecy_index}"
-                );
+                expected_layer = max(expected_layer, *dependecy_layer);
                 stack.push(dependecy);
             }
+            if task.dependencies.len() > 0 {
+                assert_eq!(task_layer, &(expected_layer.add(1 as usize)));
+            } else {
+                assert_eq!(task_layer, &expected_layer);
+            }
         }
-        assert!(planed_layers.len() == expected_reachable.len());
-        assert_eq!(
-            planed_layers.sort(),
-            expected_reachable
-                .iter()
-                .cloned()
-                .collect::<Vec<&str>>()
-                .sort()
-        );
+        assert!(planned_tasks.len() == expected_reachable.len());
+        assert_eq!(planned_tasks, expected_reachable);
     }
     fn assert_traversal_correctness(graph: &DependencyGraph, roots: &[&str], result: &[String]) {
         let mut positions: HashMap<&str, usize> = HashMap::new();
