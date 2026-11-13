@@ -1,6 +1,7 @@
 use std::{
     cmp,
     collections::VecDeque,
+    panic::{self, RefUnwindSafe},
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, Sender},
@@ -8,36 +9,45 @@ use std::{
     thread,
 };
 
-enum QueueStatus {
-    Open,
-    Closed,
-}
-
 struct SharedQueue {
     queue: VecDeque<String>,
-    status: QueueStatus,
 }
 
 impl SharedQueue {
     fn new(queue: VecDeque<String>) -> Self {
-        Self {
-            queue: queue,
-            status: QueueStatus::Open,
-        }
+        Self { queue: queue }
     }
 }
 
 #[derive(Debug)]
-pub struct TaskResult {
-    task_id: String,
-    result: Result<(), TaskError>,
+pub enum TaskError {
+    FailedExecution(String),
 }
+
 #[derive(Debug)]
-pub enum TaskError {}
-pub fn execute_layer<F>(tasks: Vec<String>, max_workers: usize, task_fn: F) -> Vec<TaskResult>
+pub enum TaskOutcome {
+    Succes,
+    Falied(TaskError),
+    Panicked,
+    Nonstarted,
+}
+
+#[derive(Debug)]
+pub struct TaskExecutionResult {
+    pub task_id: String,
+    pub outcome: TaskOutcome,
+}
+
+pub struct ExecutionReport {
+    pub tasks: Vec<TaskExecutionResult>,
+}
+
+pub fn execute_layer<F>(tasks: Vec<String>, max_workers: usize, task_fn: F) -> ExecutionReport
 where
-    F: Fn(&str) -> Result<(), TaskError> + Send + Sync + 'static,
+    F: Fn(&str) -> Result<(), TaskError> + Send + Sync + RefUnwindSafe + 'static,
 {
+    assert!(max_workers > 0, "max_workers must be more than 0");
+
     let mut queue: VecDeque<String> = VecDeque::new();
     for task in tasks.iter() {
         queue.push_back(task.clone());
@@ -47,7 +57,7 @@ where
     let workers = cmp::min(max_workers, tasks.len());
     let mut handlers: Vec<thread::JoinHandle<()>> = vec![];
     let task_fn: Arc<F> = Arc::new(task_fn);
-    let (tx, rx): (Sender<TaskResult>, Receiver<TaskResult>) = mpsc::channel();
+    let (tx, rx): (Sender<TaskExecutionResult>, Receiver<TaskExecutionResult>) = mpsc::channel();
     for id in 0..workers {
         let shared_queue = Arc::clone(&shared_queue);
         let task_fn = Arc::clone(&task_fn);
@@ -58,10 +68,17 @@ where
                 match next_task {
                     Some(task) => {
                         println!("hello from another thread {id}-{:?}", task);
-                        let result = task_fn(&task);
+                        let outcome: TaskOutcome;
+                        match panic::catch_unwind(|| task_fn(&task)) {
+                            Ok(res) => match res {
+                                Ok(_) => outcome = TaskOutcome::Succes,
+                                Err(err) => outcome = TaskOutcome::Falied(err),
+                            },
+                            Err(_) => outcome = TaskOutcome::Panicked,
+                        }
                         worker_tx
-                            .send(TaskResult {
-                                result: result,
+                            .send(TaskExecutionResult {
+                                outcome: outcome,
                                 task_id: task,
                             })
                             .unwrap();
@@ -77,38 +94,75 @@ where
 
     drop(tx);
 
-    let mut result: Vec<TaskResult> = Vec::with_capacity(tasks.len());
+    let mut task_report: Vec<TaskExecutionResult> = Vec::with_capacity(tasks.len());
     while let Ok(res) = rx.recv() {
-        result.push(res);
+        task_report.push(res);
     }
 
     for handler in handlers {
-        handler.join().unwrap();
+        match handler.join() {
+            Ok(_) => {
+                println!("thread execution ended without problems");
+            }
+            Err(err) => {
+                if let Some(msg) = err.downcast_ref::<&'static str>() {
+                    println!("thread was unable to be completed: {}", msg);
+                } else if let Some(msg) = err.downcast_ref::<String>() {
+                    println!("thread was unable to be completed: {}", msg);
+                } else {
+                    println!("thread was unable to be completed");
+                }
+            }
+        }
     }
 
-    println!("{:?}", result);
-    result
+    println!("{:?}", task_report);
+    ExecutionReport { tasks: task_report }
 }
 
 #[cfg(test)]
 mod execution_test {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
-    fn test_execute_layer() {
+    fn test_execute_layer_all_tasks_are_prsent_only_once() {
         let exec = |task_id: &str| -> Result<(), TaskError> {
             println!("executing {task_id}");
+            if task_id == "task_1" {
+                return Err(TaskError::FailedExecution(
+                    "i just don't want to".to_string(),
+                ));
+            } else if task_id == "task_8" {
+                panic!("uh i died");
+            }
             Ok(())
         };
-        execute_layer(
-            vec![
-                "A".to_string(),
-                "B".to_string(),
-                "C".to_string(),
-                "X".to_string(),
-            ],
-            2,
-            exec,
+        let task_number = 10;
+        let mut tasks = vec![];
+        let mut key_set: HashSet<String> = HashSet::new();
+        for number in 0..task_number {
+            tasks.push(format!("task_{}", number));
+            key_set.insert(format!("task_{}", number));
+        }
+        let report = execute_layer(tasks, 3, exec);
+        assert_eq!(
+            task_number,
+            report.tasks.len(),
+            "the result must include a result for all tasks"
         );
+        let mut result_set: HashSet<&str> = HashSet::new();
+        for result in report.tasks.iter() {
+            let task_id = result.task_id.as_str();
+            assert!(
+                result_set.insert(task_id),
+                "{task_id} must be executed only once"
+            );
+            assert!(
+                key_set.contains(task_id),
+                "{task_id} must be part of the input keys"
+            );
+        }
     }
 }
