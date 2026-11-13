@@ -60,7 +60,7 @@ pub fn execute_layer<F>(
 where
     F: Fn(&str) -> Result<(), TaskError> + Send + Sync + RefUnwindSafe + 'static,
 {
-    if max_workers <= 0 {
+    if max_workers == 0 {
         return Err(ExecutionError::InvalidWorkerCount);
     }
 
