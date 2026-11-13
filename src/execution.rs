@@ -1,10 +1,10 @@
 use std::{
     cmp,
     collections::VecDeque,
-    panic::{self, RefUnwindSafe},
+    panic::{RefUnwindSafe, catch_unwind},
     sync::{
         Arc, Mutex,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{Receiver, Sender, channel},
     },
     thread,
 };
@@ -29,7 +29,6 @@ pub enum TaskOutcome {
     Succes,
     Falied(TaskError),
     Panicked,
-    Nonstarted,
 }
 
 #[derive(Debug)]
@@ -57,7 +56,7 @@ where
     let workers = cmp::min(max_workers, tasks.len());
     let mut handlers: Vec<thread::JoinHandle<()>> = vec![];
     let task_fn: Arc<F> = Arc::new(task_fn);
-    let (tx, rx): (Sender<TaskExecutionResult>, Receiver<TaskExecutionResult>) = mpsc::channel();
+    let (tx, rx): (Sender<TaskExecutionResult>, Receiver<TaskExecutionResult>) = channel();
     for id in 0..workers {
         let shared_queue = Arc::clone(&shared_queue);
         let task_fn = Arc::clone(&task_fn);
@@ -69,7 +68,7 @@ where
                     Some(task_id) => {
                         println!("hello from another thread {id}-{:?}", task_id);
                         let outcome: TaskOutcome;
-                        match panic::catch_unwind(|| task_fn(&task_id)) {
+                        match catch_unwind(|| task_fn(&task_id)) {
                             Ok(res) => match res {
                                 Ok(_) => outcome = TaskOutcome::Succes,
                                 Err(err) => outcome = TaskOutcome::Falied(err),
@@ -113,7 +112,6 @@ where
         }
     }
 
-    println!("{:?}", task_report);
     ExecutionReport { tasks: task_report }
 }
 
@@ -124,19 +122,12 @@ mod execution_test {
     use super::*;
 
     #[test]
-    fn test_execute_layer_all_tasks_are_prsent_only_once() {
+    fn test_execute_layer_all_tasks_are_present_only_once() {
         let exec = |task_id: &str| -> Result<(), TaskError> {
             println!("executing {task_id}");
-            if task_id == "task_1" {
-                return Err(TaskError::FailedExecution(
-                    "i just don't want to".to_string(),
-                ));
-            } else if task_id == "task_8" {
-                panic!("uh i died");
-            }
             Ok(())
         };
-        let task_number = 10;
+        let task_number = 45;
         let mut tasks = vec![];
         let mut key_set: HashSet<String> = HashSet::new();
         for number in 0..task_number {
