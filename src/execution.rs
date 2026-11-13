@@ -9,6 +9,8 @@ use std::{
     thread,
 };
 
+use thiserror::Error;
+
 struct SharedQueue {
     queue: VecDeque<String>,
 }
@@ -38,27 +40,46 @@ pub struct TaskExecutionResult {
     pub outcome: TaskOutcome,
 }
 
+#[derive(Debug, Error)]
+pub enum ExecutionError {
+    #[error("the number of max workers should be more than 0")]
+    InvalidWorkerCount,
+    #[error("Invalid input tasks contains {0} as duplicated entry")]
+    DuplicatedTask(String),
+}
+
 pub struct ExecutionReport {
     pub tasks: Vec<TaskExecutionResult>,
 }
 
-pub fn execute_layer<F>(tasks: Vec<String>, max_workers: usize, task_fn: F) -> ExecutionReport
+pub fn execute_layer<F>(
+    tasks: Vec<String>,
+    max_workers: usize,
+    task_fn: F,
+) -> Result<ExecutionReport, ExecutionError>
 where
     F: Fn(&str) -> Result<(), TaskError> + Send + Sync + RefUnwindSafe + 'static,
 {
-    assert!(max_workers > 0, "max_workers must be more than 0");
+    if max_workers <= 0 {
+        return Err(ExecutionError::InvalidWorkerCount);
+    }
 
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut task_report: HashMap<&str, TaskExecutionResult> = HashMap::with_capacity(tasks.len());
     for task in tasks.iter() {
+        if task_report
+            .insert(
+                task,
+                TaskExecutionResult {
+                    task_id: task.clone(),
+                    outcome: TaskOutcome::NonStarted,
+                },
+            )
+            .is_some()
+        {
+            return Err(ExecutionError::DuplicatedTask(task.clone()));
+        }
         queue.push_back(task.clone());
-        task_report.insert(
-            task,
-            TaskExecutionResult {
-                task_id: task.clone(),
-                outcome: TaskOutcome::NonStarted,
-            },
-        );
     }
 
     let shared_queue: Arc<Mutex<SharedQueue>> = Arc::new(Mutex::new(SharedQueue::new(queue)));
@@ -122,9 +143,9 @@ where
         }
     }
 
-    ExecutionReport {
+    Ok(ExecutionReport {
         tasks: task_report.into_values().collect(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -150,7 +171,7 @@ mod execution_test {
             tasks.push(format!("task_{}", number));
             key_set.insert(format!("task_{}", number));
         }
-        let report = execute_layer(tasks, 3, exec);
+        let report = execute_layer(tasks, 3, exec).expect("for no error to come out");
         assert_eq!(
             task_number,
             report.tasks.len(),
@@ -189,7 +210,8 @@ mod execution_test {
                 thread::sleep(Duration::from_millis(10));
                 task_active.fetch_sub(1, Ordering::SeqCst);
                 Ok(())
-            });
+            })
+            .expect("for no error to come out");
 
             let observed_peak = peak.load(Ordering::SeqCst);
 
@@ -243,7 +265,8 @@ mod execution_test {
                 Some(TaskOutcome::Panicked) => panic!("you say die I died"),
                 _ => return Ok(()),
             }
-        });
+        })
+        .expect("for no error to come out");
 
         assert_eq!(report.tasks.len(), task_count);
         for t in report.tasks.iter() {
