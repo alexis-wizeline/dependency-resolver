@@ -53,7 +53,7 @@ where
     for task in tasks.iter() {
         queue.push_back(task.clone());
         task_report.insert(
-            &task,
+            task,
             TaskExecutionResult {
                 task_id: task.clone(),
                 outcome: TaskOutcome::NonStarted,
@@ -123,7 +123,7 @@ where
     }
 
     ExecutionReport {
-        tasks: task_report.into_iter().map(|(_, v)| v).collect(),
+        tasks: task_report.into_values().collect(),
     }
 }
 
