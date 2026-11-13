@@ -1,6 +1,6 @@
 use std::{
     cmp,
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     panic::{RefUnwindSafe, catch_unwind},
     sync::{
         Arc, Mutex,
@@ -19,16 +19,17 @@ impl SharedQueue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TaskError {
     FailedExecution(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum TaskOutcome {
     Succes,
     Falied(TaskError),
     Panicked,
+    NonStarted,
 }
 
 #[derive(Debug)]
@@ -48,8 +49,16 @@ where
     assert!(max_workers > 0, "max_workers must be more than 0");
 
     let mut queue: VecDeque<String> = VecDeque::new();
+    let mut task_report: HashMap<&str, TaskExecutionResult> = HashMap::with_capacity(tasks.len());
     for task in tasks.iter() {
         queue.push_back(task.clone());
+        task_report.insert(
+            &task,
+            TaskExecutionResult {
+                task_id: task.clone(),
+                outcome: TaskOutcome::NonStarted,
+            },
+        );
     }
 
     let shared_queue: Arc<Mutex<SharedQueue>> = Arc::new(Mutex::new(SharedQueue::new(queue)));
@@ -90,9 +99,10 @@ where
 
     drop(tx);
 
-    let mut task_report: Vec<TaskExecutionResult> = Vec::with_capacity(tasks.len());
     while let Ok(res) = rx.recv() {
-        task_report.push(res);
+        if let Some(report) = task_report.get_mut(res.task_id.as_str()) {
+            report.outcome = res.outcome
+        }
     }
 
     for handler in handlers {
@@ -112,12 +122,18 @@ where
         }
     }
 
-    ExecutionReport { tasks: task_report }
+    ExecutionReport {
+        tasks: task_report.into_iter().map(|(_, v)| v).collect(),
+    }
 }
 
 #[cfg(test)]
 mod execution_test {
-    use std::collections::HashSet;
+    use std::{
+        collections::HashSet,
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
 
     use super::*;
 
@@ -150,6 +166,92 @@ mod execution_test {
             assert!(
                 key_set.contains(task_id),
                 "{task_id} must be part of the input keys"
+            );
+        }
+    }
+
+    #[test]
+    fn test_execute_layer_respects_concurrency_limit() {
+        for max_workers in [1, 2, 4] {
+            let task_count = 32;
+            let tasks: Vec<String> = (0..task_count).map(|i| format!("task_{i}")).collect();
+
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+
+            let task_active = Arc::clone(&active);
+            let task_peak = Arc::clone(&peak);
+
+            let report = execute_layer(tasks, max_workers, move |_| {
+                let running = task_active.fetch_add(1, Ordering::SeqCst) + 1;
+                task_peak.fetch_max(running, Ordering::SeqCst);
+
+                thread::sleep(Duration::from_millis(10));
+                task_active.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            });
+
+            let observed_peak = peak.load(Ordering::SeqCst);
+
+            assert!(
+                observed_peak <= max_workers,
+                "limit was {max_workers}, but {observed_peak} tasks ran simultaneosly"
+            );
+            assert!(observed_peak > 0);
+            assert_eq!(active.load(Ordering::SeqCst), 0);
+            assert_eq!(report.tasks.len(), task_count);
+            assert!(
+                report
+                    .tasks
+                    .iter()
+                    .all(|res| { matches!(&res.outcome, TaskOutcome::Succes) }),
+                "all tasks should succeed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_execute_layer_collects_all_results() {
+        let task_count = 32;
+        let mut outcome_map: HashMap<String, TaskOutcome> = HashMap::new();
+        let mut tasks: Vec<String> = Vec::new();
+        for i in 0..task_count {
+            tasks.push(format!("Task_{i}"));
+            match i % 3 {
+                0 => {
+                    outcome_map.insert(format!("Task_{i}"), TaskOutcome::Panicked);
+                }
+                2 => {
+                    outcome_map.insert(
+                        format!("Task_{i}"),
+                        TaskOutcome::Falied(TaskError::FailedExecution(String::from(""))),
+                    );
+                }
+                _ => {
+                    outcome_map.insert(format!("Task_{i}"), TaskOutcome::Succes);
+                }
+            }
+        }
+
+        let outcome_map = Arc::new(outcome_map);
+        let task_outcome_map = Arc::clone(&outcome_map);
+        let report = execute_layer(tasks, 3, move |task_id| {
+            match task_outcome_map.get(task_id) {
+                Some(TaskOutcome::Falied(_)) => {
+                    return Err(TaskError::FailedExecution(String::from("")));
+                }
+                Some(TaskOutcome::Panicked) => panic!("you say die I died"),
+                _ => return Ok(()),
+            }
+        });
+
+        assert_eq!(report.tasks.len(), task_count);
+        for t in report.tasks.iter() {
+            assert_eq!(
+                &t.outcome,
+                outcome_map
+                    .get(&t.task_id)
+                    .unwrap_or(&TaskOutcome::NonStarted)
             );
         }
     }
