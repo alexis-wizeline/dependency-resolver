@@ -15,7 +15,7 @@ struct SharedQueue {
 
 impl SharedQueue {
     fn new(queue: VecDeque<String>) -> Self {
-        Self { queue: queue }
+        Self { queue }
     }
 }
 
@@ -66,10 +66,10 @@ where
             loop {
                 let next_task = shared_queue.lock().unwrap().queue.pop_front();
                 match next_task {
-                    Some(task) => {
-                        println!("hello from another thread {id}-{:?}", task);
+                    Some(task_id) => {
+                        println!("hello from another thread {id}-{:?}", task_id);
                         let outcome: TaskOutcome;
-                        match panic::catch_unwind(|| task_fn(&task)) {
+                        match panic::catch_unwind(|| task_fn(&task_id)) {
                             Ok(res) => match res {
                                 Ok(_) => outcome = TaskOutcome::Succes,
                                 Err(err) => outcome = TaskOutcome::Falied(err),
@@ -77,10 +77,7 @@ where
                             Err(_) => outcome = TaskOutcome::Panicked,
                         }
                         worker_tx
-                            .send(TaskExecutionResult {
-                                outcome: outcome,
-                                task_id: task,
-                            })
+                            .send(TaskExecutionResult { outcome, task_id })
                             .unwrap();
                     }
                     None => {
