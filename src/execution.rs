@@ -28,10 +28,10 @@ pub enum TaskError {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TaskOutcome {
-    Succes,
-    Falied(TaskError),
+    Success,
+    Failed(TaskError),
     Panicked,
-    NonStarted,
+    NotStarted,
 }
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ pub struct TaskExecutionResult {
     pub outcome: TaskOutcome,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum ExecutionError {
     #[error("the number of max workers should be more than 0")]
     InvalidWorkerCount,
@@ -48,6 +48,7 @@ pub enum ExecutionError {
     DuplicatedTask(String),
 }
 
+#[derive(Debug)]
 pub struct ExecutionReport {
     pub tasks: Vec<TaskExecutionResult>,
 }
@@ -72,7 +73,7 @@ where
                 task,
                 TaskExecutionResult {
                     task_id: task.clone(),
-                    outcome: TaskOutcome::NonStarted,
+                    outcome: TaskOutcome::NotStarted,
                 },
             )
             .is_some()
@@ -87,7 +88,7 @@ where
     let mut handlers: Vec<thread::JoinHandle<()>> = vec![];
     let task_fn: Arc<F> = Arc::new(task_fn);
     let (tx, rx): (Sender<TaskExecutionResult>, Receiver<TaskExecutionResult>) = channel();
-    for id in 0..workers {
+    for _ in 0..workers {
         let shared_queue = Arc::clone(&shared_queue);
         let task_fn = Arc::clone(&task_fn);
         let worker_tx = tx.clone();
@@ -96,12 +97,11 @@ where
                 let next_task = shared_queue.lock().unwrap().queue.pop_front();
                 match next_task {
                     Some(task_id) => {
-                        println!("hello from another thread {id}-{:?}", task_id);
                         let outcome: TaskOutcome;
                         match catch_unwind(|| task_fn(&task_id)) {
                             Ok(res) => match res {
-                                Ok(_) => outcome = TaskOutcome::Succes,
-                                Err(err) => outcome = TaskOutcome::Falied(err),
+                                Ok(_) => outcome = TaskOutcome::Success,
+                                Err(err) => outcome = TaskOutcome::Failed(err),
                             },
                             Err(_) => outcome = TaskOutcome::Panicked,
                         }
@@ -110,7 +110,6 @@ where
                             .unwrap();
                     }
                     None => {
-                        println!("{id} exiting");
                         break;
                     }
                 }
@@ -160,10 +159,7 @@ mod execution_test {
 
     #[test]
     fn test_execute_layer_all_tasks_are_present_only_once() {
-        let exec = |task_id: &str| -> Result<(), TaskError> {
-            println!("executing {task_id}");
-            Ok(())
-        };
+        let exec = |_: &str| -> Result<(), TaskError> { Ok(()) };
         let task_number = 45;
         let mut tasks = vec![];
         let mut key_set: HashSet<String> = HashSet::new();
@@ -226,7 +222,7 @@ mod execution_test {
                 report
                     .tasks
                     .iter()
-                    .all(|res| { matches!(&res.outcome, TaskOutcome::Succes) }),
+                    .all(|res| { matches!(&res.outcome, TaskOutcome::Success) }),
                 "all tasks should succeed"
             );
         }
@@ -246,11 +242,11 @@ mod execution_test {
                 2 => {
                     outcome_map.insert(
                         format!("Task_{i}"),
-                        TaskOutcome::Falied(TaskError::FailedExecution(String::from(""))),
+                        TaskOutcome::Failed(TaskError::FailedExecution(String::from(""))),
                     );
                 }
                 _ => {
-                    outcome_map.insert(format!("Task_{i}"), TaskOutcome::Succes);
+                    outcome_map.insert(format!("Task_{i}"), TaskOutcome::Success);
                 }
             }
         }
@@ -259,7 +255,7 @@ mod execution_test {
         let task_outcome_map = Arc::clone(&outcome_map);
         let report = execute_layer(tasks, 3, move |task_id| {
             match task_outcome_map.get(task_id) {
-                Some(TaskOutcome::Falied(_)) => {
+                Some(TaskOutcome::Failed(_)) => {
                     return Err(TaskError::FailedExecution(String::from("")));
                 }
                 Some(TaskOutcome::Panicked) => panic!("you say die I died"),
@@ -274,8 +270,46 @@ mod execution_test {
                 &t.outcome,
                 outcome_map
                     .get(&t.task_id)
-                    .unwrap_or(&TaskOutcome::NonStarted)
+                    .unwrap_or(&TaskOutcome::NotStarted)
             );
         }
+    }
+
+    #[test]
+    fn test_execute_layers_validates_workers() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let tas_counter = Arc::clone(&counter);
+        let result = execute_layer(
+            vec!["A".to_string(), "B".to_string()],
+            0,
+            move |_| -> Result<(), TaskError> {
+                tas_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(counter.load(Ordering::SeqCst) == 0, "not worker should run");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ExecutionError::InvalidWorkerCount);
+    }
+
+    #[test]
+    fn test_execute_layers_validate_duplicateds() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let tas_counter = Arc::clone(&counter);
+        let result = execute_layer(
+            vec!["A".to_string(), "B".to_string(), "A".to_string()],
+            3,
+            move |_| -> Result<(), TaskError> {
+                tas_counter.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(counter.load(Ordering::SeqCst) == 0, "not worker should run");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            ExecutionError::DuplicatedTask("A".to_string())
+        );
     }
 }
