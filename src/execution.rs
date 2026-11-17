@@ -32,6 +32,7 @@ pub enum TaskOutcome {
     Failed(TaskError),
     Panicked,
     NotStarted,
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -48,9 +49,15 @@ pub enum ExecutionError {
     DuplicatedTask(String),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum WorkerError {
+    Panicked(String),
+}
+
 #[derive(Debug)]
 pub struct ExecutionReport {
     pub tasks: Vec<TaskExecutionResult>,
+    pub worker_errors: Vec<WorkerError>,
 }
 
 pub fn execute_layer<F>(
@@ -73,7 +80,7 @@ where
                 task,
                 TaskExecutionResult {
                     task_id: task.clone(),
-                    outcome: TaskOutcome::NotStarted,
+                    outcome: TaskOutcome::Unknown,
                 },
             )
             .is_some()
@@ -125,25 +132,44 @@ where
         }
     }
 
+    let mut worker_errors: Vec<WorkerError> = Vec::new();
     for handler in handlers {
         match handler.join() {
-            Ok(_) => {
-                println!("thread execution ended without problems");
-            }
+            Ok(_) => {}
             Err(err) => {
+                let message: String;
                 if let Some(msg) = err.downcast_ref::<&'static str>() {
-                    println!("thread was unable to be completed: {}", msg);
+                    message = msg.to_string();
                 } else if let Some(msg) = err.downcast_ref::<String>() {
-                    println!("thread was unable to be completed: {}", msg);
+                    message = msg.to_owned();
                 } else {
-                    println!("thread was unable to be completed");
+                    message = String::from("Worker panick from and unknow error");
                 }
+                worker_errors.push(WorkerError::Panicked(message));
             }
         }
     }
 
+    match shared_queue.lock() {
+        Ok(res) => {
+            for task in res.queue.iter() {
+                if let Some(report) = task_report.get_mut(task.as_str()) {
+                    report.outcome = TaskOutcome::NotStarted
+                }
+            }
+        }
+        Err(possioned) => {
+            for task in possioned.into_inner().queue.iter() {
+                if let Some(report) = task_report.get_mut(task.as_str()) {
+                    report.outcome = TaskOutcome::NotStarted
+                }
+            }
+        }
+    };
+
     Ok(ExecutionReport {
         tasks: task_report.into_values().collect(),
+        worker_errors,
     })
 }
 
