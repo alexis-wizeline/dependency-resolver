@@ -52,6 +52,7 @@ pub enum ExecutionError {
 #[derive(Debug, PartialEq, Eq)]
 pub enum WorkerError {
     Panicked(String),
+    SpawnFailed(String),
 }
 
 #[derive(Debug)]
@@ -90,8 +91,9 @@ where
         queue.push_back(task.clone());
     }
 
+    let mut worker_errors: Vec<WorkerError> = Vec::new();
     let shared_queue: Arc<Mutex<SharedQueue>> = Arc::new(Mutex::new(SharedQueue::new(queue)));
-    let workers = cmp::min(max_workers, tasks.len());
+    let workers: usize = cmp::min(max_workers, tasks.len());
     let mut handlers: Vec<thread::JoinHandle<()>> = vec![];
     let task_fn: Arc<F> = Arc::new(task_fn);
     let (tx, rx): (Sender<TaskExecutionResult>, Receiver<TaskExecutionResult>) = channel();
@@ -99,9 +101,9 @@ where
         let shared_queue = Arc::clone(&shared_queue);
         let task_fn = Arc::clone(&task_fn);
         let worker_tx = tx.clone();
-        handlers.push(thread::spawn(move || {
+        match thread::Builder::new().spawn(move || {
             loop {
-                let next_task = shared_queue.lock().unwrap().queue.pop_front();
+                let next_task: Option<String> = shared_queue.lock().unwrap().queue.pop_front();
                 match next_task {
                     Some(task_id) => {
                         let outcome: TaskOutcome;
@@ -121,7 +123,14 @@ where
                     }
                 }
             }
-        }));
+        }) {
+            Ok(handler) => {
+                handlers.push(handler);
+            }
+            Err(err) => {
+                worker_errors.push(WorkerError::SpawnFailed(err.to_string()));
+            }
+        };
     }
 
     drop(tx);
@@ -132,7 +141,6 @@ where
         }
     }
 
-    let mut worker_errors: Vec<WorkerError> = Vec::new();
     for handler in handlers {
         match handler.join() {
             Ok(_) => {}
@@ -143,29 +151,22 @@ where
                 } else if let Some(msg) = err.downcast_ref::<String>() {
                     message = msg.to_owned();
                 } else {
-                    message = String::from("Worker panick from and unknow error");
+                    message = String::from("Worker panicked from an unknow error");
                 }
                 worker_errors.push(WorkerError::Panicked(message));
             }
         }
     }
 
-    match shared_queue.lock() {
-        Ok(res) => {
-            for task in res.queue.iter() {
-                if let Some(report) = task_report.get_mut(task.as_str()) {
-                    report.outcome = TaskOutcome::NotStarted
-                }
-            }
+    let queue_guard = shared_queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    for task in queue_guard.queue.iter() {
+        if let Some(report) = task_report.get_mut(task.as_str()) {
+            report.outcome = TaskOutcome::NotStarted
         }
-        Err(possioned) => {
-            for task in possioned.into_inner().queue.iter() {
-                if let Some(report) = task_report.get_mut(task.as_str()) {
-                    report.outcome = TaskOutcome::NotStarted
-                }
-            }
-        }
-    };
+    }
 
     Ok(ExecutionReport {
         tasks: task_report.into_values().collect(),
