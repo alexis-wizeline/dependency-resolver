@@ -177,7 +177,6 @@ where
 #[cfg(test)]
 mod execution_test {
     use std::{
-        collections::HashSet,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
@@ -186,32 +185,44 @@ mod execution_test {
 
     #[test]
     fn test_execute_layer_all_tasks_are_present_only_once() {
-        let exec = |_: &str| -> Result<(), TaskError> { Ok(()) };
         let task_number = 45;
-        let mut tasks = vec![];
-        let mut key_set: HashSet<String> = HashSet::new();
+        let mut tasks: Vec<String> = vec![];
+        let mut counter_map: HashMap<String, AtomicUsize> = HashMap::new();
         for number in 0..task_number {
             tasks.push(format!("task_{}", number));
-            key_set.insert(format!("task_{}", number));
+            counter_map.insert(format!("task_{}", number), AtomicUsize::new(0));
         }
+
+        let arc_map = Arc::new(counter_map);
+        let task_map = Arc::clone(&arc_map);
+        let exec = move |task_id: &str| -> Result<(), TaskError> {
+            if let Some(counter) = task_map.get(task_id) {
+                counter.fetch_add(1, Ordering::Relaxed);
+            } else {
+                panic!("{task_id} does not exist inside the related map");
+            }
+            Ok(())
+        };
+
         let report = execute_layer(tasks, 3, exec).expect("for no error to come out");
+        assert!(report.worker_errors.is_empty());
         assert_eq!(
             task_number,
             report.tasks.len(),
             "the result must include a result for all tasks"
         );
-        let mut result_set: HashSet<&str> = HashSet::new();
-        for result in report.tasks.iter() {
-            let task_id = result.task_id.as_str();
-            assert!(
-                result_set.insert(task_id),
-                "{task_id} must be executed only once"
-            );
-            assert!(
-                key_set.contains(task_id),
-                "{task_id} must be part of the input keys"
-            );
-        }
+        assert!(
+            arc_map.iter().all(|(_, c)| c.load(Ordering::Relaxed) == 1),
+            "all tasks must execute just once"
+        );
+
+        assert!(
+            report
+                .tasks
+                .iter()
+                .all(|res| matches!(&res.outcome, TaskOutcome::Success)),
+            "all the outcomes must be success"
+        );
     }
 
     #[test]
@@ -244,6 +255,7 @@ mod execution_test {
             );
             assert!(observed_peak > 0);
             assert_eq!(active.load(Ordering::SeqCst), 0);
+            assert!(report.worker_errors.is_empty());
             assert_eq!(report.tasks.len(), task_count);
             assert!(
                 report
@@ -291,6 +303,7 @@ mod execution_test {
         })
         .expect("for no error to come out");
 
+        assert!(report.worker_errors.is_empty());
         assert_eq!(report.tasks.len(), task_count);
         for t in report.tasks.iter() {
             assert_eq!(
@@ -305,17 +318,20 @@ mod execution_test {
     #[test]
     fn test_execute_layers_validates_workers() {
         let counter = Arc::new(AtomicUsize::new(0));
-        let tas_counter = Arc::clone(&counter);
+        let task_counter = Arc::clone(&counter);
         let result = execute_layer(
             vec!["A".to_string(), "B".to_string()],
             0,
             move |_| -> Result<(), TaskError> {
-                tas_counter.fetch_add(1, Ordering::SeqCst);
+                task_counter.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             },
         );
 
-        assert!(counter.load(Ordering::SeqCst) == 0, "not worker should run");
+        assert!(
+            counter.load(Ordering::Relaxed) == 0,
+            "not worker should run"
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), ExecutionError::InvalidWorkerCount);
     }
