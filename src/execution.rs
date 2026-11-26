@@ -177,7 +177,11 @@ where
 #[cfg(test)]
 mod execution_test {
     use std::{
-        sync::atomic::{AtomicUsize, Ordering},
+        collections::HashSet,
+        sync::{
+            Condvar,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
@@ -223,6 +227,31 @@ mod execution_test {
                 .all(|res| matches!(&res.outcome, TaskOutcome::Success)),
             "all the outcomes must be success"
         );
+
+        let mut result_set: HashSet<&str> = HashSet::new();
+        for task in report.tasks.iter() {
+            assert!(
+                result_set.insert(&task.task_id),
+                "{} should appear just once",
+                task.task_id
+            );
+            assert!(
+                arc_map.contains_key(&task.task_id),
+                "{} must be present in the input",
+                &task.task_id
+            );
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum GateStatus {
+        Waiting,
+        Released,
+        TimedOut,
+    }
+    struct GateState {
+        arrived: usize,
+        status: GateStatus,
     }
 
     #[test]
@@ -237,24 +266,47 @@ mod execution_test {
             let task_active = Arc::clone(&active);
             let task_peak = Arc::clone(&peak);
 
+            let gate = Arc::new((
+                Mutex::new(GateState {
+                    arrived: 0,
+                    status: GateStatus::Waiting,
+                }),
+                Condvar::new(),
+            ));
+            let task_gate = Arc::clone(&gate);
             let report = execute_layer(tasks, max_workers, move |_| {
                 let running = task_active.fetch_add(1, Ordering::SeqCst) + 1;
                 task_peak.fetch_max(running, Ordering::SeqCst);
 
-                thread::sleep(Duration::from_millis(10));
+                let (mutex, cvar) = &*task_gate;
+                let mut state = mutex.lock().unwrap();
+
+                if state.status == GateStatus::Waiting {
+                    state.arrived += 1;
+
+                    if state.arrived == max_workers && state.status == GateStatus::Waiting {
+                        state.status = GateStatus::Released;
+                        cvar.notify_all();
+                    } else {
+                        let (new_state, result) = cvar
+                            .wait_timeout_while(state, Duration::from_secs(5), |state| {
+                                state.status == GateStatus::Waiting
+                            })
+                            .unwrap();
+
+                        state = new_state;
+                        if result.timed_out() && state.status == GateStatus::Waiting {
+                            state.status = GateStatus::TimedOut;
+                            cvar.notify_all();
+                        }
+                    }
+                }
+
                 task_active.fetch_sub(1, Ordering::SeqCst);
                 Ok(())
             })
             .expect("for no error to come out");
 
-            let observed_peak = peak.load(Ordering::SeqCst);
-
-            assert!(
-                observed_peak <= max_workers,
-                "limit was {max_workers}, but {observed_peak} tasks ran simultaneosly"
-            );
-            assert!(observed_peak > 0);
-            assert_eq!(active.load(Ordering::SeqCst), 0);
             assert!(report.worker_errors.is_empty());
             assert_eq!(report.tasks.len(), task_count);
             assert!(
@@ -264,6 +316,15 @@ mod execution_test {
                     .all(|res| { matches!(&res.outcome, TaskOutcome::Success) }),
                 "all tasks should succeed"
             );
+
+            let state = gate.0.lock().unwrap();
+            assert_eq!(state.arrived, max_workers);
+            assert_eq!(state.status, GateStatus::Released);
+
+            let observed_peak = peak.load(Ordering::SeqCst);
+
+            assert_eq!(observed_peak, max_workers);
+            assert_eq!(active.load(Ordering::SeqCst), 0);
         }
     }
 
@@ -344,7 +405,7 @@ mod execution_test {
             vec!["A".to_string(), "B".to_string(), "A".to_string()],
             3,
             move |_| -> Result<(), TaskError> {
-                tas_counter.fetch_add(1, Ordering::SeqCst);
+                tas_counter.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             },
         );
@@ -354,5 +415,22 @@ mod execution_test {
             result.unwrap_err(),
             ExecutionError::DuplicatedTask("A".to_string())
         );
+    }
+
+    #[test]
+    fn test_execute_layers_empty_request_returnt_empty_result() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task_counter = Arc::clone(&counter);
+        let result = execute_layer(vec![], 1, move |_: &str| -> Result<(), TaskError> {
+            task_counter.fetch_add(0, Ordering::Relaxed);
+            Ok(())
+        })
+        .expect("for the executio to don't fail");
+        assert!(
+            counter.load(Ordering::Relaxed) == 0,
+            "no executions should run for empty request"
+        );
+        assert!(result.worker_errors.is_empty());
+        assert!(result.tasks.is_empty());
     }
 }
